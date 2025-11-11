@@ -1,0 +1,400 @@
+import pandas as pd
+import numpy as np
+import math
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+from datetime import datetime, timedelta
+
+# 1. ИСХОДНЫЕ ДАННЫЕ
+N_sut = 30  # Общий автопарк
+T_rab = 9  # Продолжительность работы, ч
+T_sg = 1.2  # Период сгущенного подхода, ч
+delta_sg = 0.55  # Доля парка в сгущ. период
+k_sg = 2  # Параметр Эрланга (сгущ)
+k_nesg = 4  # Параметр Эрланга (несгущ)
+S = 2  # Количество секций
+t_start = datetime.strptime("08:00", "%H:%M")  # Время начала работы
+q_DAF = 5;
+q_IVECO = 4  # Грузоподъемность, т
+beta_DAF = 0.40;
+beta_IVECO = 0.60  # Доля авто DAF/IVECO
+t_ob_DAF = 16;
+t_ob_IVECO = 11  # Время обслуживания, мин
+C_pr = 300;
+C_gr = 1.5  # Стоимость, руб/ч и руб/тч
+
+# Таблица случайных чисел (ПЗ 2) - читаем последовательно по строкам
+random_numbers_raw = """
+0.9209 0.0564 0.9774 0.0338 0.0112 0.0450 0.0562 0.1012 0.1574
+0.6213 0.4773 0.0986 0.5758 0.6744 0.2503 0.9247 0.1749 0.0996
+0.3660 0.0604 0.4263 0.4867 0.9131 0.3998 0.3129 0.7127 0.0256
+0.8020 0.8359 0.6379 0.4737 0.1116 0.5853 0.6970 0.2825 0.9793
+0.2342 0.2229 0.4571 0.6799 0.1370 0.8169 0.9539 0.7709 0.7248
+0.2417 0.8307 0.0724 0.9031 0.9755 0.8786 0.8541 0.7327 0.5868
+0.8469 0.3363 0.1831 0.5194 0.7026 0.2220 0.9245 0.1465 0.0710
+0.3967 0.4908 0.8865 0.3772 0.2637 0.6408 0.9046 0.5455 0.4501
+0.5433 0.7584 0.3017 0.0601 0.3617 0.4218 0.7835 0.2055 0.9888
+0.4337 0.9404 0.3641 0.2945 0.6587 0.9532 0.6119 0.5651 0.1769
+0.0614 0.8821 0.9435 0.8255 0.7690 0.5945 0.3635 0.9671 0.3216
+0.2076 0.0529 0.2608 0.3136 0.5744 0.8880 0.4624 0.3505 0.8129
+0.6280 0.8560 0.6280 0.6279 0.2561 0.8841 0.1402 0.0243 0.1644
+0.7684 0.1000 0.8684 0.9684 0.8368 0.8053 0.6421 0.4474 0.0895
+0.6946 0.4367 0.1313 0.5679 0.6992 0.2671 0.9663 0.2334 0.1998
+0.2296 0.6939 0.9235 0.6174 0.5410 0.1584 0.6994 0.8578 0.5572
+0.8520 0.9577 0.8097 0.7674 0.5772 0.3446 0.9218 0.2665 0.1883
+0.4184 0.9981 0.4164 0.4145 0.8309 0.2454 0.0764 0.3218 0.3982
+0.5468 0.2985 0.8453 0.1438 0.9891 0.1329 0.1221 0.2550 0.3771
+0.2330 0.1746 0.4075 0.5821 0.9897 0.5718 0.5614 0.1332 0.6947
+0.3195 0.4157 0.7352 0.1509 0.8860 0.0369 0.9230 0.9599 0.8826
+0.0173 0.1727 0.1900 0.3627 0.5527 0.9155 0.4682 0.3837 0.8519
+0.8772 0.0210 0.8982 0.9192 0.8174 0.7365 0.5539 0.2904 0.8443
+0.5059 0.8052 0.3111 0.1163 0.4274 0.5438 0.9712 0.5150 0.4862
+0.9058 0.3468 0.2526 0.5993 0.8519 0.4513 0.3032 0.7545 0.0577
+0.0189 0.8041 0.8230 0.6271 0.4501 0.0772 0.5273 0.6044 0.1317
+0.6228 0.1701 0.7930 0.9631 0.7561 0.7191 0.4752 0.1943 0.6695
+0.5862 0.8446 0.4307 0.2753 0.7060 0.9813 0.6873 0.6686 0.3558
+0.1642 0.1388 0.3030 0.4418 0.7447 0.1865 0.9312 0.1177 0.0489
+0.5567 0.1338 0.6905 0.8243 0.5148 0.3391 0.8539 0.1930 0.0468
+0.4923 0.6449 0.1372 0.7821 0.9193 0.7015 0.6208 0.3223 0.9431
+0.9961 0.8354 0.8315 0.6669 0.4983 0.1652 0.6635 0.8286 0.4921
+0.1069 0.1336 0.2405 0.3741 0.6146 0.9888 0.6034 0.5921 0.1965
+0.8034 0.0821 0.8855 0.9675 0.8530 0.8205 0.6734 0.4939 0.1673
+0.9341 0.0603 0.9945 0.0548 0.0493 0.1041 0.1534 0.2575 0.4109
+0.9765 0.3782 0.3547 0.7330 0.0877 0.8207 0.9083 0.7290 0.6373
+"""
+random_numbers = [float(x) for x in random_numbers_raw.split()]
+rn_idx = 0
+
+# 2. РАСЧЕТ ИНТЕНСИВНОСТИ И КОНСТАНТ
+lambda_sg = N_sut * delta_sg / T_sg
+lambda_nesg = N_sut * (1 - delta_sg) / (T_rab - T_sg)
+
+C_sg = -60 / (k_sg * lambda_sg)
+C_nesg = -60 / (k_nesg * lambda_nesg)
+
+T_sg_end = t_start + timedelta(hours=T_sg)
+
+# 3. МОДЕЛИРОВАНИЕ ПРИБЫТИЯ АВТОМОБИЛЕЙ (ТАБЛИЦА 1.1)
+results = []
+current_time = t_start
+time_of_arrival_minutes = 0
+
+
+def get_interval(current_time):
+    global rn_idx
+    if current_time < T_sg_end:
+        # Сгущенный период
+        k = k_sg
+        C = C_sg
+        lambda_val = lambda_sg
+    else:
+        # Несгущенный период
+        k = k_nesg
+        C = C_nesg
+        lambda_val = lambda_nesg
+
+    if rn_idx + k > len(random_numbers):
+        # Если случайных чисел не хватит (хотя для 30 авто их достаточно)
+        return 0, 'ERROR'
+
+    R_prod = 1
+    R_used = []
+    for _ in range(k):
+        R_val = random_numbers[rn_idx]
+        R_used.append(R_val)
+        R_prod *= R_val
+        rn_idx += 1
+
+    # Формула Эрланга:
+    t_interval = round(C * math.log(R_prod))
+
+    return t_interval, R_used, (k, lambda_val)
+
+
+def get_car_mark(R_mark):
+    global rn_idx
+    if 0 <= R_mark <= beta_IVECO:
+        return 'IVECO', t_ob_IVECO, q_IVECO
+    else:
+        return 'DAF', t_ob_DAF, q_DAF
+
+
+# Первое авто
+R_mark_1 = random_numbers[rn_idx];
+rn_idx += 1
+R_section_1 = random_numbers[rn_idx];
+rn_idx += 1
+mark, t_ob, q = get_car_mark(R_mark_1)
+
+results.append({
+    '№': 1,
+    'Период': 'Старт',
+    'R_t': '',
+    'Интервал, мин': 0,
+    'Время подхода': t_start,
+    'R_марка': R_mark_1,
+    'Марка авто': mark,
+    'Время обсл, мин': t_ob,
+    'R_секция': R_section_1,
+    'time_of_arrival_minutes': 0
+})
+
+# Моделируем остальные авто
+for i in range(2, N_sut + 1):
+    # 1. Интервал подхода
+    t_interval, R_used, (k, lambda_val) = get_interval(current_time)
+
+    # 2. Новое время подхода
+    current_time += timedelta(minutes=t_interval)
+    time_of_arrival_minutes += t_interval
+
+    # 3. Марка авто
+    R_mark = random_numbers[rn_idx];
+    rn_idx += 1
+    mark, t_ob, q = get_car_mark(R_mark)
+
+    # 4. Секция (для М1)
+    R_section = random_numbers[rn_idx];
+    rn_idx += 1
+
+    results.append({
+        '№': i,
+        'Период': 'СГ' if current_time <= T_sg_end else 'НСГ',
+        'R_t': f'({k}, {lambda_val:.4f})' + str(R_used),
+        'Интервал, мин': t_interval,
+        'Время подхода': current_time,
+        'R_марка': R_mark,
+        'Марка авто': mark,
+        'Время обсл, мин': t_ob,
+        'R_секция': R_section,
+        'time_of_arrival_minutes': time_of_arrival_minutes
+    })
+
+df_sim = pd.DataFrame(results)
+df_sim['Время подхода (часы-минуты)'] = df_sim['Время подхода'].dt.strftime('%H:%M')
+
+# 4. МОДЕЛИРОВАНИЕ ОБСЛУЖИВАНИЯ (МОДЕЛЬ 1: НЕРЕГУЛИРУЕМЫЙ ПОДВОД)
+df_M1 = df_sim.copy()
+S1_free_time = t_start
+S2_free_time = t_start
+total_wait_M1 = 0
+gantt_M1 = []
+
+for index, row in df_M1.iterrows():
+    # Определение секции по R_секция
+    # S=2: [0, 0.5] -> S1, (0.5, 1.0] -> S2
+    section = 1 if row['R_секция'] <= 0.5 else 2
+    df_M1.loc[index, 'Секция подхода (М1)'] = section
+
+    t_arr = row['Время подхода']
+    t_ob = timedelta(minutes=row['Время обсл, мин'])
+
+    if section == 1:
+        t_free = S1_free_time
+        if t_arr >= t_free:
+            t_start_service = t_arr
+            t_wait = timedelta(minutes=0)
+        else:
+            t_start_service = t_free
+            t_wait = t_free - t_arr
+        S1_free_time = t_start_service + t_ob
+    else:  # section == 2
+        t_free = S2_free_time
+        if t_arr >= t_free:
+            t_start_service = t_arr
+            t_wait = timedelta(minutes=0)
+        else:
+            t_start_service = t_free
+            t_wait = t_free - t_arr
+        S2_free_time = t_start_service + t_ob
+
+    total_wait_M1 += t_wait.total_seconds() / 60
+
+    df_M1.loc[index, 'Время начала обсл (М1)'] = t_start_service
+    df_M1.loc[index, 'Время убытия (М1)'] = t_start_service + t_ob
+    df_M1.loc[index, 'Время ожидания, мин (М1)'] = round(t_wait.total_seconds() / 60, 2)
+
+    gantt_M1.append({
+        'Task': f"Авто {row['№']} ({row['Марка авто']})",
+        'Start': t_start_service,
+        'End': t_start_service + t_ob,
+        'Section': f"Секция {section}",
+        'Wait_Start': t_arr,
+        'Wait_End': t_start_service
+    })
+
+Sigma_T_post_1 = round(total_wait_M1 / 60, 4)
+
+# 5. МОДЕЛИРОВАНИЕ ОБСЛУЖИВАНИЯ (МОДЕЛЬ 2: РЕГУЛИРУЕМЫЙ ПОДВОД)
+df_M2 = df_sim.copy()
+S1_free_time = t_start
+S2_free_time = t_start
+total_wait_M2 = 0
+gantt_M2 = []
+
+for index, row in df_M2.iterrows():
+    t_arr = row['Время подхода']
+    t_ob = timedelta(minutes=row['Время обсл, мин'])
+
+    # Определение секции по принципу "кто раньше освободится"
+    free_s1_at_arrival = max(t_arr, S1_free_time)
+    free_s2_at_arrival = max(t_arr, S2_free_time)
+
+    if free_s1_at_arrival <= free_s2_at_arrival:
+        section = 1
+        t_start_service = free_s1_at_arrival
+        S1_free_time = t_start_service + t_ob
+        t_wait = t_start_service - t_arr
+    else:
+        section = 2
+        t_start_service = free_s2_at_arrival
+        S2_free_time = t_start_service + t_ob
+        t_wait = t_start_service - t_arr
+
+    total_wait_M2 += t_wait.total_seconds() / 60
+
+    df_M2.loc[index, 'Секция подхода (М2)'] = section
+    df_M2.loc[index, 'Время начала обсл (М2)'] = t_start_service
+    df_M2.loc[index, 'Время убытия (М2)'] = t_start_service + t_ob
+    df_M2.loc[index, 'Время ожидания, мин (М2)'] = round(t_wait.total_seconds() / 60, 2)
+
+    gantt_M2.append({
+        'Task': f"Авто {row['№']} ({row['Марка авто']})",
+        'Start': t_start_service,
+        'End': t_start_service + t_ob,
+        'Section': f"Секция {section}",
+        'Wait_Start': t_arr,
+        'Wait_End': t_start_service
+    })
+
+Sigma_T_post_2 = round(total_wait_M2 / 60, 4)
+
+# 6. РАСЧЕТ ЭКОНОМИЧЕСКОЙ ЭФФЕКТИВНОСТИ
+Delta_T = Sigma_T_post_1 - Sigma_T_post_2  # Сокращение времени простоя, авт-ч/сутки
+q_a = q_DAF * beta_DAF + q_IVECO * beta_IVECO  # Средневзвешенная грузоподъемность
+E_sut = Delta_T * C_pr + Delta_T * q_a * C_gr
+E_god = E_sut * 365  # Годовая экономия
+
+economic_efficiency = {
+    'Параметр': [
+        'Суммарное время простоя (Нерегулируемый)',
+        'Суммарное время простоя (Регулируемый)',
+        'Сокращение простоя (за сутки)',
+        'Средневзвешенная грузоподъемность',
+        'Годовая экономия'
+    ],
+    'Значение': [
+        Sigma_T_post_1,
+        Sigma_T_post_2,
+        round(Delta_T, 4),
+        round(q_a, 2),
+        round(E_god, 2)
+    ],
+    'Ед. измерения': [
+        'авт-ч/сутки',
+        'авт-ч/сутки',
+        'авт-ч/сутки',
+        'т',
+        'руб/год'
+    ]
+}
+df_eco = pd.DataFrame(economic_efficiency)
+
+
+# 7. ПОСТРОЕНИЕ ГРАФИКОВ ГАНТТА
+def create_gantt_chart(gantt_data, title, save_path):
+    df_gantt = pd.DataFrame(gantt_data)
+
+    # Сортировка по времени начала для корректного отображения
+    df_gantt = df_gantt.sort_values(by=['Section', 'Start'])
+
+    fig, ax = plt.subplots(figsize=(15, 8))
+
+    sections = df_gantt['Section'].unique()
+    section_map = {sec: i for i, sec in enumerate(sections)}
+
+    # ИСПРАВЛЕНИЕ: Используем рекомендуемый синтаксис для Matplotlib 3.7+
+    # Заменяет: section_colors = plt.cm.get_cmap('Pastel1', len(sections))
+    section_colors = plt.colormaps.get_cmap('Pastel1')
+
+    for idx, row in df_gantt.iterrows():
+        section_idx = section_map[row['Section']]
+
+        # Отрезок обслуживания
+        # Используем section_colors(section_idx / (len(sections) - 1)) для равномерного выбора цветов,
+        # если len(sections) > 1, иначе просто section_colors(section_idx)
+        color_val = section_colors(section_idx / (len(sections) - 1)) if len(sections) > 1 else section_colors(0)
+        ax.barh(row['Section'], row['End'] - row['Start'], left=row['Start'],
+                height=0.6, color=color_val, edgecolor='black',
+                label=row['Section'] if row['Section'] not in ax.get_legend_handles_labels()[1] else None)
+
+        # Отрезок ожидания
+        if row['Wait_Start'] < row['Wait_End']:
+            ax.barh(row['Section'], row['Wait_End'] - row['Wait_Start'], left=row['Wait_Start'],
+                    height=0.6, color='red', alpha=0.5, hatch='//',
+                    label='Простой/Ожидание' if 'Простой/Ожидание' not in ax.get_legend_handles_labels()[1] else None)
+
+        # Номер автомобиля
+        center_time = row['Start'] + (row['End'] - row['Start']) / 2
+        ax.text(center_time, row['Section'], row['Task'].split(' ')[1],
+                ha='center', va='center', fontsize=8, color='black', fontweight='bold')
+
+    # Форматирование оси X (Время)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+    ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
+    ax.xaxis.set_minor_locator(mdates.MinuteLocator(interval=15))
+    ax.set_xlim(t_start, t_start + timedelta(hours=T_rab))
+
+    # Настройки графика
+    ax.set_xlabel('Время')
+    ax.set_ylabel('Секция склада')
+    ax.set_title(
+        title + f'\n(Общий простой: {round(total_wait_M1 / 60, 4) if "Нерегулируемый" in title else round(total_wait_M2 / 60, 4)} авт-ч/сутки)')
+    ax.grid(axis='x', linestyle='--', alpha=0.7)
+    plt.xticks(rotation=45, ha='right')
+
+    # Убираем дублирование легенды
+    handles, labels = ax.get_legend_handles_labels()
+    unique_labels = dict(zip(labels, handles))
+    ax.legend(unique_labels.values(), unique_labels.keys(), loc='lower right')
+
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
+
+
+# 8. СОХРАНЕНИЕ РЕЗУЛЬТАТОВ В EXCEL
+excel_file = 'Расчет_Обслуживание_Автомобилей.xlsx'
+writer = pd.ExcelWriter(excel_file, engine='xlsxwriter')
+
+# Подготовка таблицы 1.1 для вывода
+df_sim_clean = df_M1[['№', 'Интервал, мин', 'Время подхода (часы-минуты)', 'Марка авто', 'Время обсл, мин']].copy()
+df_M1_output = df_sim_clean.rename(columns={
+    'Интервал, мин': 'Интервалы между прибытием автомобилей, мин',
+    'Время подхода (часы-минуты)': 'Время подхода автомобилей (часы-минуты)',
+    'Марка авто': 'Марка прибывшего автомобиля',
+    'Время обсл, мин': 'Время обслуживания автомобиля у секций грузового склада, мин'
+})
+# Добавляем столбцы для Таблицы 1.1 из Модели 1
+df_M1_output['Время убытия автомобиля'] = df_M1['Время убытия (М1)'].dt.strftime('%H:%M')
+df_M1_output['Секция подхода автомобиля'] = df_M1['Секция подхода (М1)'].astype(int)
+df_M1_output['Время ожидания, мин (Нерегулируемый)'] = df_M1['Время ожидания, мин (М1)']
+
+df_M1_output.to_excel(writer, sheet_name='Таблица 1.1 (Нерегулируемый)', index=False)
+
+# Таблица для Регулируемого подвода
+df_M2_output = df_sim_clean.copy()
+df_M2_output['Время убытия автомобиля'] = df_M2['Время убытия (М2)'].dt.strftime('%H:%M')
+df_M2_output['Секция подхода автомобиля'] = df_M2['Секция подхода (М2)'].astype(int)
+df_M2_output['Время ожидания, мин (Регулируемый)'] = df_M2['Время ожидания, мин (М2)']
+df_M2_output.to_excel(writer, sheet_name='Таблица (Регулируемый)', index=False)
+
+# Экономическая эффективность
+df_eco.to_excel(writer, sheet_name='Экономическая эффективность', index=False)
+
+# Закрытие writer'а для сохранения файла
+writer.close()
+
+# Построение и сохранение графиков
+create_gantt_chart(gantt_M1, 'График 1: Нерегулируемый подвод автомобилей', 'Нерегулируемый_подвод.png')
+create_gantt_chart(gantt_M2, 'График 2: Регулируемый подвод автомобилей', 'Регулируемый_подвод.png')
