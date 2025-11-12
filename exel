@@ -6,13 +6,13 @@ import matplotlib.dates as mdates
 from datetime import datetime, timedelta
 
 # 1. ИСХОДНЫЕ ДАННЫЕ
-N_sut = 30  # Общий автопарк
-T_rab = 9  # Продолжительность работы, ч
+N_sut = 30  # Общий автопарк (Nсут=30 для 9-го разряда)
+T_rab = 9  # Продолжительность работы, ч (Tраб=9 для 9-го разряда)
 T_sg = 1.2  # Период сгущенного подхода, ч
 delta_sg = 0.55  # Доля парка в сгущ. период
 k_sg = 2  # Параметр Эрланга (сгущ)
 k_nesg = 4  # Параметр Эрланга (несгущ)
-S = 2  # Количество секций
+S = 3  # !!! ИЗМЕНЕНИЕ: Количество секций по вашему варианту !!!
 t_start = datetime.strptime("08:00", "%H:%M")  # Время начала работы
 q_DAF = 5;
 q_IVECO = 4  # Грузоподъемность, т
@@ -24,6 +24,7 @@ C_pr = 300;
 C_gr = 1.5  # Стоимость, руб/ч и руб/тч
 
 # Таблица случайных чисел (ПЗ 2) - читаем последовательно по строкам
+# Используется тот же набор, что и в первом ответе
 random_numbers_raw = """
 0.9209 0.0564 0.9774 0.0338 0.0112 0.0450 0.0562 0.1012 0.1574
 0.6213 0.4773 0.0986 0.5758 0.6744 0.2503 0.9247 0.1749 0.0996
@@ -65,7 +66,7 @@ random_numbers_raw = """
 random_numbers = [float(x) for x in random_numbers_raw.split()]
 rn_idx = 0
 
-# 2. РАСЧЕТ ИНТЕНСИВНОСТИ И КОНСТАНТ
+# 2. РАСЧЕТ ИНТЕНСИВНОСТИ И КОНСТАНТ (НЕ ИЗМЕНИЛОСЬ)
 lambda_sg = N_sut * delta_sg / T_sg
 lambda_nesg = N_sut * (1 - delta_sg) / (T_rab - T_sg)
 
@@ -75,6 +76,7 @@ C_nesg = -60 / (k_nesg * lambda_nesg)
 T_sg_end = t_start + timedelta(hours=T_sg)
 
 # 3. МОДЕЛИРОВАНИЕ ПРИБЫТИЯ АВТОМОБИЛЕЙ (ТАБЛИЦА 1.1)
+# (Логика не меняется, так как зависит только от N_sut)
 results = []
 current_time = t_start
 time_of_arrival_minutes = 0
@@ -83,19 +85,15 @@ time_of_arrival_minutes = 0
 def get_interval(current_time):
     global rn_idx
     if current_time < T_sg_end:
-        # Сгущенный период
         k = k_sg
         C = C_sg
         lambda_val = lambda_sg
     else:
-        # Несгущенный период
         k = k_nesg
         C = C_nesg
         lambda_val = lambda_nesg
 
-    if rn_idx + k > len(random_numbers):
-        # Если случайных чисел не хватит (хотя для 30 авто их достаточно)
-        return 0, 'ERROR'
+    if rn_idx + k > len(random_numbers): return 0, 'ERROR', (0, 0)
 
     R_prod = 1
     R_used = []
@@ -105,9 +103,7 @@ def get_interval(current_time):
         R_prod *= R_val
         rn_idx += 1
 
-    # Формула Эрланга:
     t_interval = round(C * math.log(R_prod))
-
     return t_interval, R_used, (k, lambda_val)
 
 
@@ -141,19 +137,12 @@ results.append({
 
 # Моделируем остальные авто
 for i in range(2, N_sut + 1):
-    # 1. Интервал подхода
     t_interval, R_used, (k, lambda_val) = get_interval(current_time)
-
-    # 2. Новое время подхода
     current_time += timedelta(minutes=t_interval)
     time_of_arrival_minutes += t_interval
-
-    # 3. Марка авто
     R_mark = random_numbers[rn_idx];
     rn_idx += 1
     mark, t_ob, q = get_car_mark(R_mark)
-
-    # 4. Секция (для М1)
     R_section = random_numbers[rn_idx];
     rn_idx += 1
 
@@ -173,40 +162,35 @@ for i in range(2, N_sut + 1):
 df_sim = pd.DataFrame(results)
 df_sim['Время подхода (часы-минуты)'] = df_sim['Время подхода'].dt.strftime('%H:%M')
 
-# 4. МОДЕЛИРОВАНИЕ ОБСЛУЖИВАНИЯ (МОДЕЛЬ 1: НЕРЕГУЛИРУЕМЫЙ ПОДВОД)
+# 4. МОДЕЛИРОВАНИЕ ОБСЛУЖИВАНИЯ (МОДЕЛЬ 1: НЕРЕГУЛИРУЕМЫЙ ПОДВОД, S=3)
 df_M1 = df_sim.copy()
-S1_free_time = t_start
-S2_free_time = t_start
+S_free_times_M1 = {i: t_start for i in range(1, S + 1)}
 total_wait_M1 = 0
 gantt_M1 = []
 
 for index, row in df_M1.iterrows():
-    # Определение секции по R_секция
-    # S=2: [0, 0.5] -> S1, (0.5, 1.0] -> S2
-    section = 1 if row['R_секция'] <= 0.5 else 2
+    # Определение секции по R_секция (S=3: [0, 0.333] -> S1, (0.333, 0.666] -> S2, (0.666, 1.0] -> S3)
+    if row['R_секция'] <= 1 / 3:
+        section = 1
+    elif row['R_секция'] <= 2 / 3:
+        section = 2
+    else:
+        section = 3
+
     df_M1.loc[index, 'Секция подхода (М1)'] = section
 
     t_arr = row['Время подхода']
     t_ob = timedelta(minutes=row['Время обсл, мин'])
 
-    if section == 1:
-        t_free = S1_free_time
-        if t_arr >= t_free:
-            t_start_service = t_arr
-            t_wait = timedelta(minutes=0)
-        else:
-            t_start_service = t_free
-            t_wait = t_free - t_arr
-        S1_free_time = t_start_service + t_ob
-    else:  # section == 2
-        t_free = S2_free_time
-        if t_arr >= t_free:
-            t_start_service = t_arr
-            t_wait = timedelta(minutes=0)
-        else:
-            t_start_service = t_free
-            t_wait = t_free - t_arr
-        S2_free_time = t_start_service + t_ob
+    t_free = S_free_times_M1[section]
+    if t_arr >= t_free:
+        t_start_service = t_arr
+        t_wait = timedelta(minutes=0)
+    else:
+        t_start_service = t_free
+        t_wait = t_free - t_arr
+
+    S_free_times_M1[section] = t_start_service + t_ob
 
     total_wait_M1 += t_wait.total_seconds() / 60
 
@@ -225,10 +209,9 @@ for index, row in df_M1.iterrows():
 
 Sigma_T_post_1 = round(total_wait_M1 / 60, 4)
 
-# 5. МОДЕЛИРОВАНИЕ ОБСЛУЖИВАНИЯ (МОДЕЛЬ 2: РЕГУЛИРУЕМЫЙ ПОДВОД)
+# 5. МОДЕЛИРОВАНИЕ ОБСЛУЖИВАНИЯ (МОДЕЛЬ 2: РЕГУЛИРУЕМЫЙ ПОДВОД, S=3)
 df_M2 = df_sim.copy()
-S1_free_time = t_start
-S2_free_time = t_start
+S_free_times_M2 = {i: t_start for i in range(1, S + 1)}
 total_wait_M2 = 0
 gantt_M2 = []
 
@@ -237,19 +220,16 @@ for index, row in df_M2.iterrows():
     t_ob = timedelta(minutes=row['Время обсл, мин'])
 
     # Определение секции по принципу "кто раньше освободится"
-    free_s1_at_arrival = max(t_arr, S1_free_time)
-    free_s2_at_arrival = max(t_arr, S2_free_time)
+    free_times_at_arrival = {
+        s: max(t_arr, S_free_times_M2[s]) for s in range(1, S + 1)
+    }
 
-    if free_s1_at_arrival <= free_s2_at_arrival:
-        section = 1
-        t_start_service = free_s1_at_arrival
-        S1_free_time = t_start_service + t_ob
-        t_wait = t_start_service - t_arr
-    else:
-        section = 2
-        t_start_service = free_s2_at_arrival
-        S2_free_time = t_start_service + t_ob
-        t_wait = t_start_service - t_arr
+    # Найти секцию с минимальным временем начала обслуживания
+    section = min(free_times_at_arrival, key=free_times_at_arrival.get)
+    t_start_service = free_times_at_arrival[section]
+
+    t_wait = t_start_service - t_arr
+    S_free_times_M2[section] = t_start_service + t_ob
 
     total_wait_M2 += t_wait.total_seconds() / 60
 
@@ -301,7 +281,7 @@ economic_efficiency = {
 df_eco = pd.DataFrame(economic_efficiency)
 
 
-# 7. ПОСТРОЕНИЕ ГРАФИКОВ ГАНТТА
+# 7. ПОСТРОЕНИЕ ГРАФИКОВ ГАНТТА (Адаптировано для S=3)
 def create_gantt_chart(gantt_data, title, save_path):
     df_gantt = pd.DataFrame(gantt_data)
 
@@ -310,46 +290,49 @@ def create_gantt_chart(gantt_data, title, save_path):
 
     fig, ax = plt.subplots(figsize=(15, 8))
 
-    sections = df_gantt['Section'].unique()
+    sections = [f'Секция {i}' for i in range(1, S + 1)]  # Явное определение 3 секций
     section_map = {sec: i for i, sec in enumerate(sections)}
 
-    # ИСПРАВЛЕНИЕ: Используем рекомендуемый синтаксис для Matplotlib 3.7+
-    # Заменяет: section_colors = plt.cm.get_cmap('Pastel1', len(sections))
     section_colors = plt.colormaps.get_cmap('Pastel1')
 
     for idx, row in df_gantt.iterrows():
-        section_idx = section_map[row['Section']]
+        section_name = row['Section']
+        section_idx = section_map[section_name]
 
         # Отрезок обслуживания
-        # Используем section_colors(section_idx / (len(sections) - 1)) для равномерного выбора цветов,
-        # если len(sections) > 1, иначе просто section_colors(section_idx)
         color_val = section_colors(section_idx / (len(sections) - 1)) if len(sections) > 1 else section_colors(0)
-        ax.barh(row['Section'], row['End'] - row['Start'], left=row['Start'],
+        ax.barh(section_name, row['End'] - row['Start'], left=row['Start'],
                 height=0.6, color=color_val, edgecolor='black',
-                label=row['Section'] if row['Section'] not in ax.get_legend_handles_labels()[1] else None)
+                label=section_name if section_name not in ax.get_legend_handles_labels()[1] else None)
 
         # Отрезок ожидания
         if row['Wait_Start'] < row['Wait_End']:
-            ax.barh(row['Section'], row['Wait_End'] - row['Wait_Start'], left=row['Wait_Start'],
+            ax.barh(section_name, row['Wait_End'] - row['Wait_Start'], left=row['Wait_Start'],
                     height=0.6, color='red', alpha=0.5, hatch='//',
                     label='Простой/Ожидание' if 'Простой/Ожидание' not in ax.get_legend_handles_labels()[1] else None)
 
         # Номер автомобиля
         center_time = row['Start'] + (row['End'] - row['Start']) / 2
-        ax.text(center_time, row['Section'], row['Task'].split(' ')[1],
+        ax.text(center_time, section_name, row['Task'].split(' ')[1],
                 ha='center', va='center', fontsize=8, color='black', fontweight='bold')
 
+    # Форматирование оси Y
+    ax.set_yticks(sections)
+    ax.set_yticklabels(sections)
+
     # Форматирование оси X (Время)
+    start_time = t_start
+    end_time = t_start + timedelta(hours=T_rab)
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
     ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
     ax.xaxis.set_minor_locator(mdates.MinuteLocator(interval=15))
-    ax.set_xlim(t_start, t_start + timedelta(hours=T_rab))
+    ax.set_xlim(start_time, end_time)
 
     # Настройки графика
     ax.set_xlabel('Время')
     ax.set_ylabel('Секция склада')
     ax.set_title(
-        title + f'\n(Общий простой: {round(total_wait_M1 / 60, 4) if "Нерегулируемый" in title else round(total_wait_M2 / 60, 4)} авт-ч/сутки)')
+        title + f'\n(Общий простой: {Sigma_T_post_1 if "Нерегулируемый" in title else Sigma_T_post_2} авт-ч/сутки)')
     ax.grid(axis='x', linestyle='--', alpha=0.7)
     plt.xticks(rotation=45, ha='right')
 
@@ -364,26 +347,25 @@ def create_gantt_chart(gantt_data, title, save_path):
 
 
 # 8. СОХРАНЕНИЕ РЕЗУЛЬТАТОВ В EXCEL
-excel_file = 'Расчет_Обслуживание_Автомобилей.xlsx'
+excel_file = 'Расчет_Обслуживание_Автомобилей_S3.xlsx'
 writer = pd.ExcelWriter(excel_file, engine='xlsxwriter')
 
-# Подготовка таблицы 1.1 для вывода
-df_sim_clean = df_M1[['№', 'Интервал, мин', 'Время подхода (часы-минуты)', 'Марка авто', 'Время обсл, мин']].copy()
-df_M1_output = df_sim_clean.rename(columns={
+# Таблица 1.1 (Нерегулируемый, S=3)
+df_M1_output = df_M1[['№', 'Интервал, мин', 'Время подхода (часы-минуты)', 'Марка авто', 'Время обсл, мин']].copy()
+df_M1_output = df_M1_output.rename(columns={
     'Интервал, мин': 'Интервалы между прибытием автомобилей, мин',
     'Время подхода (часы-минуты)': 'Время подхода автомобилей (часы-минуты)',
     'Марка авто': 'Марка прибывшего автомобиля',
     'Время обсл, мин': 'Время обслуживания автомобиля у секций грузового склада, мин'
 })
-# Добавляем столбцы для Таблицы 1.1 из Модели 1
 df_M1_output['Время убытия автомобиля'] = df_M1['Время убытия (М1)'].dt.strftime('%H:%M')
 df_M1_output['Секция подхода автомобиля'] = df_M1['Секция подхода (М1)'].astype(int)
 df_M1_output['Время ожидания, мин (Нерегулируемый)'] = df_M1['Время ожидания, мин (М1)']
 
 df_M1_output.to_excel(writer, sheet_name='Таблица 1.1 (Нерегулируемый)', index=False)
 
-# Таблица для Регулируемого подвода
-df_M2_output = df_sim_clean.copy()
+# Таблица (Регулируемый, S=3)
+df_M2_output = df_sim[['№', 'Интервал, мин', 'Время подхода (часы-минуты)', 'Марка авто', 'Время обсл, мин']].copy()
 df_M2_output['Время убытия автомобиля'] = df_M2['Время убытия (М2)'].dt.strftime('%H:%M')
 df_M2_output['Секция подхода автомобиля'] = df_M2['Секция подхода (М2)'].astype(int)
 df_M2_output['Время ожидания, мин (Регулируемый)'] = df_M2['Время ожидания, мин (М2)']
@@ -396,5 +378,129 @@ df_eco.to_excel(writer, sheet_name='Экономическая эффектив�
 writer.close()
 
 # Построение и сохранение графиков
-create_gantt_chart(gantt_M1, 'График 1: Нерегулируемый подвод автомобилей', 'Нерегулируемый_подвод.png')
-create_gantt_chart(gantt_M2, 'График 2: Регулируемый подвод автомобилей', 'Регулируемый_подвод.png')
+create_gantt_chart(gantt_M1, 'График 1: Нерегулируемый подвод автомобилей (S=3)', 'Нерегулируемый_подвод_S3.png')
+create_gantt_chart(gantt_M2, 'График 2: Регулируемый подвод автомобилей (S=3)', 'Регулируемый_подвод_S3.png')
+print(f"Расчеты для S=3 завершены. Результаты сохранены в {excel_file} и двух PNG-файлах.")
+
+import matplotlib.dates as mdates
+from matplotlib.patches import Patch
+import numpy as np
+
+def plot_gantt_lanes(df, title, save_path):
+    import matplotlib.dates as mdates
+    from matplotlib.patches import Patch
+    import numpy as np
+
+    # === Надёжное определение колонок ===
+    if "Секция подхода (М1)" in df.columns:
+        sec_col = "Секция подхода (М1)"
+        start_col = "Время начала обсл (М1)"
+        end_col = "Время убытия (М1)"
+        wait_col = "Время ожидания, мин (М1)"
+    elif "Секция подхода (М2)" in df.columns:
+        sec_col = "Секция подхода (М2)"
+        start_col = "Время начала обсл (М2)"
+        end_col = "Время убытия (М2)"
+        wait_col = "Время ожидания, мин (М2)"
+    else:
+        raise ValueError("❌ Не найдены колонки 'Секция подхода (М1/М2)' в DataFrame")
+
+    arr_col = "Время подхода"
+    mark_col = "Марка авто"
+
+    # === Сортировка и группировка ===
+    df = df.sort_values([sec_col, start_col])
+    per_sec = {s: df[df[sec_col] == s].reset_index(drop=True) for s in sorted(df[sec_col].unique())}
+    lanes = {s: len(per_sec[s]) for s in per_sec}
+
+    lane_h, lane_gap, sec_gap = 0.22, 0.10, 1.0
+    order = sorted(per_sec.keys(), reverse=True)
+    base, cur_y = {}, 0.0
+    for s in order:
+        base[s] = cur_y + lanes[s] * (lane_h + lane_gap) + 0.7
+        cur_y = base[s] + sec_gap
+    total_h = cur_y + 0.5
+
+    # === Создание графика ===
+    fig, ax = plt.subplots(figsize=(14, max(6, total_h)))
+    ax.set_xlim(t_start, t_start + timedelta(hours=T_rab))
+    ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+    ax.set_xlabel("Время")
+    ax.set_title(title)
+
+    # Сетка
+    for i in range(0, T_rab * 60 + 1, 15):
+        ax.axvline(t_start + timedelta(minutes=i), color="gray", alpha=0.15, linewidth=0.7)
+    for h in range(t_start.hour, t_start.hour + T_rab + 1):
+        ax.axvline(datetime(t_start.year, t_start.month, t_start.day, h),
+                   color="gray", alpha=0.3, linewidth=1.0)
+
+    # === Рисуем секции ===
+    for s in order:
+        d, b = per_sec[s], base[s]
+        mid = b - (lanes[s] * (lane_h + lane_gap)) / 2
+        ax.text(t_start - timedelta(minutes=20), mid, f"Секция №{s}", ha="right", va="center")
+        y_top = b + 0.35
+        ax.hlines(y_top, t_start, t_start + timedelta(hours=T_rab), color="k", linewidth=1)
+
+        # Вертикальные линии прибытия
+        for i, r in d.iterrows():
+            style = "-" if r[mark_col] == "IVECO" else "--"
+            y_lane = b - i * (lane_h + lane_gap)
+            ax.vlines(r[arr_col], y_top, y_lane, linestyles=style, colors="k", linewidth=1)
+
+        # Бары ожидания и обслуживания
+        for i, r in d.iterrows():
+            y_lane = b - i * (lane_h + lane_gap)
+            wl, wr = r[arr_col], r[start_col]
+            if wr > wl:
+                ax.barh(y_lane, mdates.date2num(wr) - mdates.date2num(wl), left=mdates.date2num(wl),
+                        height=lane_h, hatch="////", edgecolor="k", facecolor='none', linewidth=1)
+            sl, sr = r[start_col], r[end_col]
+            if sr > sl:
+                face = "white" if r[mark_col] == "IVECO" else "0.75"
+                ax.barh(y_lane, mdates.date2num(sr) - mdates.date2num(sl), left=mdates.date2num(sl),
+                        height=lane_h, edgecolor="k", facecolor=face, linewidth=1)
+
+        tot = int(round(d[wait_col].sum()))
+        ax.text(t_start + timedelta(hours=T_rab, minutes=10), mid, f"{tot}",
+                va="center", ha="left", fontsize=12)
+
+    ax.set_yticks([])
+    ax.legend(handles=[
+        Patch(facecolor="white", edgecolor="k", label="обслуживание IVECO"),
+        Patch(facecolor="0.75", edgecolor="k", label="обслуживание DAF"),
+        Patch(facecolor="none", edgecolor="k", hatch="////", label="ожидание (простой)")
+    ], loc="upper right")
+
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150, bbox_inches="tight", facecolor="white")
+    plt.close()
+
+
+plot_gantt_lanes(df_M1, "Нерегулируемый подвод автомобилей", "gantt_M1_style2.png")
+plot_gantt_lanes(df_M2, "Регулируемый подвод автомобилей", "gantt_M2_style2.png")
+
+def plot_summary_table(Sigma_T_post_1, Sigma_T_post_2, save_path="summary_wait.png"):
+    Delta_T = Sigma_T_post_1 - Sigma_T_post_2
+
+    fig, ax = plt.subplots(figsize=(6, 1.8))
+    ax.axis("off")
+
+    data = [
+        ["Нерегулируемый", f"{Sigma_T_post_1:.3f}", "авт·ч/сутки"],
+        ["Регулируемый", f"{Sigma_T_post_2:.3f}", "авт·ч/сутки"],
+        ["Сокращение ΔT", f"{Delta_T:.3f}", "авт·ч/сутки"]
+    ]
+    table = ax.table(cellText=data,
+                     colLabels=["Вариант", "Σ простой", "Ед."],
+                     cellLoc='center', loc='center')
+    table.auto_set_font_size(False)
+    table.set_fontsize(11)
+    table.scale(1, 1.4)
+
+    plt.savefig(save_path, dpi=150, bbox_inches="tight", facecolor="white")
+    plt.close()
+
+plot_summary_table(Sigma_T_post_1, Sigma_T_post_2)
